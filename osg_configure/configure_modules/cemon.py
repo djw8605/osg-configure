@@ -101,10 +101,10 @@ class CemonConfiguration(BaseConfiguration):
       self.logger.warning("%s configuration ignored" % self.config_section)
       return True
 
-    # disable configuration for now
-    self.logger.debug("Not enabled")
-    self.logger.debug("CemonConfiguration.configure completed")
-    return True
+    ## disable configuration for now
+    #self.logger.debug("Not enabled")
+    #self.logger.debug("CemonConfiguration.configure completed")
+    #return True
         
     if not self.enabled:
       self.logger.debug("Not enabled")
@@ -128,7 +128,7 @@ class CemonConfiguration(BaseConfiguration):
       self.configureSubscriptions(subscription = subscription, dialect = dialect)
 
 
-    if not utilities.enable_service('tomcat-55'):
+    if not utilities.enable_service('tomcat5'):
       self.logger.error("Error while enabling tomcat")
       raise exceptions.ConfigureError("Error configuring cemon")
     self.logger.debug("Enabling apache service")
@@ -184,9 +184,6 @@ class CemonConfiguration(BaseConfiguration):
     if subscription is None:
       return 
     
-    # last two arguments get replaced with the subscription and dialect 
-    arguments = ['--server', 'y', '--topic=OSG_CE', ' ', ' ']
-    
     # check to see if subscriptions to production bdii or cemon collectors
     # present
     found_subscriptions = {}
@@ -198,16 +195,94 @@ class CemonConfiguration(BaseConfiguration):
       except Exception, ex:
         self.logger.debug("Exception checking element, %s" % ex)
 
-    arguments[-1] = "--dialect=%s" % dialect
     if subscription not in found_subscriptions.keys():
-      arguments[-2] = "--consumer=%s" % subscription
-      self.logger.info("Running configure_cemon with: %s" % (" ".join(arguments)))
-      if not utilities.configure_service('configure_cemon', arguments):
+      if not self.__installConsumer(subscription, 'OSG_CE', dialect):
         self.logger.error("Error while subscribing to server")
         raise exceptions.ConfigureError("Error configuring cemon")
    
 
     self.logger.debug("CemonConfiguration.configureSubscriptions completed")
+
+  def __installConsumer(self, consumer_host, consumer_topic, consumer_dialect):
+    """Edit the cemonitor config file to add subscriptions. Replaces the
+    functionality of install_consumer() in configure-cemon.pl"""
+
+    # For safety, convert any non-digits-or-word characters to underscores for
+    # subscription name
+    subscription = "subscription-%s-%s-%s" % (consumer_host, consumer_topic, consumer_dialect)
+    subscription = re.sub(r"[^\d\w\-]", "_", subscription)
+    if re.match(r"(?i)raw$", consumer_dialect):
+        policy_rate = 300
+    else:
+        policy_rate = 600
+
+    config_path = self.CEMON_CONFIG_FILE
+    config_file = open(config_path)
+    try:
+        contents = config_file.read()
+    finally:
+        config_file.close()
+
+    # Simple check to see if we have already installed a subscription for this
+    # host/topic/dialect combination
+    if re.search(r'id="%s"' % subscription):
+        self.logger.error("A consumer subscription for host '%s' on %s "
+                          "with %s already exists in '%s'" %
+                          (consumer_host, consumer_topic, consumer_dialect,
+                           config_path))
+        return False
+
+    # Add in the subscription information
+    add = '''
+       <!-- Installed by the VDT -->
+       <subscription id="%s"
+             monitorConsumerURL="%s"
+             sslprotocol="SSLv3"
+             retryCount="-1">
+          <topic name="%s">
+             <dialect name="%s" />
+          </topic>
+          <policy rate="%s">
+''' % (subscription, consumer_host, consumer_topic, consumer_dialect,
+       policy_rate)
+
+    # For the RAW dialect, it is critical to suppress the contents of the
+    # policy element, or else it triggers a bug in which the output is
+    # truncated. For the LDIF dialect, Leigh G requested a slightly
+    # different query/action.
+    if re.match(r"(?i)raw$", consumer_dialect):
+        pass # Do nothing -- no contents
+    elif consumer_dialect == "LDIF":
+        add += '''
+             <query queryLanguage="ClassAd"><![CDATA[true]]></query>
+             <action name="SendNotification" doActionWhenQueryIs="true" />
+             <action name="SendExpiredNotification" doActionWhenQueryIs="false" />
+'''
+    else:
+        add += '''
+             <query queryLanguage="ClassAd"><![CDATA[GlueCEStateWaitingJobs<2]]></query>
+             <action name="SendNotification" doActionWhenQueryIs="true" />
+             <action name="SendExpiredNotification" doActionWhenQueryIs="false" />
+'''
+        
+    # Close off subscription XML
+    add += '''    </policy>
+        </subscription>\n'''
+
+    contents = re.sub(r'(</service>)', add + r'\1', 1)
+    # TODO Should we replace this with a safe_write() equivalent?
+    config_file = open(config_path, 'w')
+    try:
+        config_file.write(contents)
+    finally:
+        config_file.close()
+
+    self.logger.info("The following consumer subscription has been installed:")
+    self.logger.info("\tHOST:    " + consumer_host)
+    self.logger.info("\tTOPIC:   " + consumer_topic)
+    self.logger.info("\tDIALECT: " + consumer_dialect + "\n")
+
+    return True
 
   def __checkSubscription(self, subscription, dialect):
     """
