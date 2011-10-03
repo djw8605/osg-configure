@@ -21,7 +21,7 @@ class CemonConfiguration(BaseConfiguration):
   miscellaneous services
   """
   
-  CEMON_CONFIG_FILE = "/etc/glite/cemonitor-config.xml"
+  CEMON_CONFIG_FILE = "/etc/glite-ce-monitor/cemonitor-config.xml"
   def __init__(self, *args, **kwargs):
     # pylint: disable-msg=W0142
     super(CemonConfiguration, self).__init__(*args, **kwargs)
@@ -128,13 +128,17 @@ class CemonConfiguration(BaseConfiguration):
       self.configureSubscriptions(subscription = subscription, dialect = dialect)
 
 
-    if not utilities.enable_service('tomcat5'):
-      self.logger.error("Error while enabling tomcat")
-      raise exceptions.ConfigureError("Error configuring cemon")
-    self.logger.debug("Enabling apache service")
-    if not utilities.enable_service('apache'):
-      self.logger.error("Error while enabling apache")
-      raise exceptions.ConfigureError("Error enabling apache") 
+    # Commented out the enable_service calls because currently they also start
+    # up the services and I'm not sure they should do that.
+    # Also, if starting up the service fails, the rest of the script bombs out
+    # too.
+    #if not utilities.enable_service('tomcat5'):
+    #  self.logger.error("Error while enabling tomcat")
+    #  raise exceptions.ConfigureError("Error configuring cemon")
+    #self.logger.debug("Enabling apache service")
+    #if not utilities.enable_service('httpd'):
+    #  self.logger.error("Error while enabling httpd")
+    #  raise exceptions.ConfigureError("Error enabling httpd") 
 
     self.logger.debug("CemonConfiguration.configure completed")
     return True
@@ -215,17 +219,21 @@ class CemonConfiguration(BaseConfiguration):
         policy_rate = 300
     else:
         policy_rate = 600
-
     config_path = self.CEMON_CONFIG_FILE
-    config_file = open(config_path)
     try:
+      config_file = open(config_path)
+      try:
         contents = config_file.read()
-    finally:
+      finally:
         config_file.close()
+    except IOError, e:
+      self.logger.error("Error reading from configuration file at %s: %s" %
+                        (config_path, e))
+      return False
 
     # Simple check to see if we have already installed a subscription for this
     # host/topic/dialect combination
-    if re.search(r'id="%s"' % subscription):
+    if re.search(r'id="%s"' % subscription, contents):
         self.logger.error("A consumer subscription for host '%s' on %s "
                           "with %s already exists in '%s'" %
                           (consumer_host, consumer_topic, consumer_dialect,
@@ -234,15 +242,15 @@ class CemonConfiguration(BaseConfiguration):
 
     # Add in the subscription information
     add = '''
-       <!-- Installed by the VDT -->
-       <subscription id="%s"
-             monitorConsumerURL="%s"
-             sslprotocol="SSLv3"
-             retryCount="-1">
-          <topic name="%s">
-             <dialect name="%s" />
-          </topic>
-          <policy rate="%s">
+  <!-- Installed by the VDT -->
+  <subscription id="%s"
+        monitorConsumerURL="%s"
+        sslprotocol="SSLv3"
+        retryCount="-1">
+     <topic name="%s">
+        <dialect name="%s" />
+     </topic>
+     <policy rate="%s">
 ''' % (subscription, consumer_host, consumer_topic, consumer_dialect,
        policy_rate)
 
@@ -254,28 +262,32 @@ class CemonConfiguration(BaseConfiguration):
         pass # Do nothing -- no contents
     elif consumer_dialect == "LDIF":
         add += '''
-             <query queryLanguage="ClassAd"><![CDATA[true]]></query>
-             <action name="SendNotification" doActionWhenQueryIs="true" />
-             <action name="SendExpiredNotification" doActionWhenQueryIs="false" />
+        <query queryLanguage="ClassAd"><![CDATA[true]]></query>
+        <action name="SendNotification" doActionWhenQueryIs="true" />
+        <action name="SendExpiredNotification" doActionWhenQueryIs="false" />
 '''
     else:
         add += '''
-             <query queryLanguage="ClassAd"><![CDATA[GlueCEStateWaitingJobs<2]]></query>
-             <action name="SendNotification" doActionWhenQueryIs="true" />
-             <action name="SendExpiredNotification" doActionWhenQueryIs="false" />
+        <query queryLanguage="ClassAd"><![CDATA[GlueCEStateWaitingJobs<2]]></query>
+        <action name="SendNotification" doActionWhenQueryIs="true" />
+        <action name="SendExpiredNotification" doActionWhenQueryIs="false" />
 '''
         
     # Close off subscription XML
-    add += '''    </policy>
-        </subscription>\n'''
+    add += '''     </policy>
+  </subscription>\n'''
 
-    contents = re.sub(r'(</service>)', add + r'\1', 1)
+    contents = re.sub(r'(</service>)', add + r'\1', contents, 1)
     # TODO Should we replace this with a safe_write() equivalent?
-    config_file = open(config_path, 'w')
     try:
+      config_file = open(config_path, 'w')
+      try:
         config_file.write(contents)
-    finally:
+      finally:
         config_file.close()
+    except IOError, e:
+      self.logger.error("Error writing to configuration file at %s: %s" %
+                        (config_path, e))
 
     self.logger.info("The following consumer subscription has been installed:")
     self.logger.info("\tHOST:    " + consumer_host)
