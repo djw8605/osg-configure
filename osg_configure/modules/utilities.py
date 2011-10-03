@@ -229,7 +229,7 @@ def get_vos(user_vo_file):
 
 def enable_service(service_name):
   """
-  Run vdt-control to enable specified service.
+  Run /sbin/service to enable specified service.
   """
   
   if service_name == None or service_name == "":
@@ -239,7 +239,7 @@ def enable_service(service_name):
 
 def disable_service(service_name):
   """
-  Run vdt-control to enable specified service.
+  Run /sbin/service to disable specified service.
   """
   
   if service_name == None or service_name == "":
