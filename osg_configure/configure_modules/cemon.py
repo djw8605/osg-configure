@@ -4,7 +4,7 @@
 """This module provides a class to handle attributes and configuration
  for CEMON subscriptions"""
 
-import os, ConfigParser, re, urlparse
+import os, ConfigParser, re, urlparse, tempfile
 
 from osg_configure.modules import exceptions
 from osg_configure.modules import utilities
@@ -278,16 +278,22 @@ class CemonConfiguration(BaseConfiguration):
   </subscription>\n'''
 
     contents = re.sub(r'(</service>)', add + r'\1', contents, 1)
-    # TODO Should we replace this with a safe_write() equivalent?
     try:
-      config_file = open(config_path, 'w')
+      (config_fd, temp_name) = tempfile.mkstemp(dir=os.path.dirname(config_path))
       try:
-        config_file.write(contents)
-      finally:
-        config_file.close()
-    except IOError, e:
-      self.logger.error("Error writing to configuration file at %s: %s" %
+        try:
+          os.write(config_fd, contents)
+        finally:
+          os.close(config_fd)
+      except:
+        os.unlink(temp_name)
+        raise
+      os.rename(temp_name, config_path)
+      os.chmod(config_path, 0644)
+    except Exception, e:
+      self.logger.error("Error updating configuration file at %s: %s" %
                         (config_path, e))
+      return False
 
     self.logger.info("The following consumer subscription has been installed:")
     self.logger.info("\tHOST:    " + consumer_host)
